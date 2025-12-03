@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -229,19 +231,99 @@ func extractProRCPURL(rcpHTML string) (string, error) {
 
 func decodeStreamURL(proRCPHTML string) (string, error) {
 	log.Println("Decoding stream URL from ProRCP HTML...")
-	// TODO: Implement the decoding logic as described in DEVELOPMENT.md.
-	// This involves finding the encoded string and the decoding script,
-	// then translating the decoding logic from JavaScript to Go.
 
-	// Placeholder for the HLS URL
-	// For now, we extract a URL if it exists, but this is not the final logic.
-	re := regexp.MustCompile(`file:\s*['"]([^'"]+)['"]`)
-	match := re.FindStringSubmatch(proRCPHTML)
-	if len(match) < 2 {
-		return "", fmt.Errorf("no file URL found in HLS page")
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(proRCPHTML))
+	if err != nil {
+		return "", fmt.Errorf("parsing ProRCP HTML: %w", err)
 	}
 
-	return match[1], nil
+	// 1. Extract and Save JS File (optional for direct decoding, but kept for reference)
+	scriptSel := doc.Find("script[src*='/sV05kUlNvOdOxvtC/']")
+	if scriptSel.Length() > 0 {
+		src, exists := scriptSel.First().Attr("src")
+		if exists {
+			fullURL := "https://cloudnestra.com" + src
+			log.Printf("Found JS file URL: %s", fullURL)
+
+			// Fetch content
+			jsContent, err := fetchContent(fullURL, "https://cloudnestra.com")
+			if err != nil {
+				log.Printf("Failed to fetch JS content: %v", err)
+			} else {
+				// Save to file
+				if err := os.MkdirAll("scripts", 0755); err != nil {
+					log.Printf("Failed to create scripts directory: %v", err)
+				} else {
+					scriptPath := "scripts/prorcp.js"
+					if err := os.WriteFile(scriptPath, []byte(jsContent), 0644); err != nil {
+						log.Printf("Failed to write JS file: %v", err)
+					} else {
+						log.Println("Saved JS content to scripts/prorcp.js")
+					}
+				}
+			}
+		}
+	} else {
+		log.Println("No script found with src containing /sV05kUlNvOdOxvtC/")
+	}
+
+	// 2. Extract Hidden Div Content and ID
+	var divContent string
+	divSel := doc.Find("div[style='display:none;']")
+	if divSel.Length() > 0 {
+		divContent = strings.TrimSpace(divSel.First().Text())
+		log.Printf("Hidden Div found, length: %d", len(divContent))
+	} else {
+		log.Println("No hidden div found with style='display:none;'")
+		return "", fmt.Errorf("no hidden div found")
+	}
+
+	// 3. Decode the content directly
+	fmt.Println("DivContent: ")
+	fmt.Println(divContent)
+
+	if divContent != "" {
+		decodedURL, err := Deobfuscate(divContent)
+		if err != nil {
+			return "", fmt.Errorf("deobfuscating content: %w", err)
+		}
+		return decodedURL, nil
+	}
+
+	return "", fmt.Errorf("failed to extract necessary components for decoding")
+}
+
+// Deobfuscate replicates the logic of the JS function:
+// 1. Reverse String -> 2. Take every 2nd char -> 3. Base64 Decode
+func Deobfuscate(obfCode string) (string, error) {
+	// Convert to rune slice to safely handle characters
+	// fmt.Println(obfCode)
+	runes := []rune(obfCode)
+	n := len(runes)
+
+	// Step 1: Reverse the slice
+	for i := 0; i < n/2; i++ {
+		runes[i], runes[n-1-i] = runes[n-1-i], runes[i]
+	}
+
+	// Step 2: Extract every 2nd character
+	// The JS loop was: i starts at 0, increments by 2
+	var filtered []rune
+	for i := 0; i < n; i += 2 {
+		filtered = append(filtered, runes[i])
+	}
+
+	filteredStr := string(filtered)
+
+	// Step 3: Base64 Decode
+	// We use RawStdEncoding to be permissive, or StdEncoding if padding is standard.
+	// Usually, standard StdEncoding is fine.
+	decodedBytes, err := base64.StdEncoding.DecodeString(filteredStr)
+	if err != nil {
+		return "", fmt.Errorf("decoding Base64: %w", err)
+	}
+
+	return string(decodedBytes), nil
 }
 
 func parseAttributes(line string) map[string]string {
@@ -273,7 +355,10 @@ func resolveRelativeURL(baseStr, refStr string) string {
 func main() {
 	// Example Movie: Iron Man 3 (2013)
 	opts := ResolveOptions{
-		IMDBID:  "tt1300854", // IMDb ID for the title
+		// IMDBID:  "tt1300854", // IMDb ID for the title
+		// IMDBID: "tt30144838",
+		IMDBID: "tt0137523",
+		// IMDBID: "tt0099685",
 		Type:    Movie,       // Movie or TV
 		Season:  0,           // only needed for TV
 		Episode: 0,           // only needed for TV

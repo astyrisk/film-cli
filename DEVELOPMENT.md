@@ -61,6 +61,8 @@ An example of the fetched "prorcp" page is at [`example/prorcp.html`](example/pr
 
 The "prorcp" page includes a script. We need to fetch this script.
 
+The script url can be found by scraping the url with "sV05kUlNvOdOxvtC"
+
 ```html
 <script src="/sV05kUlNvOdOxvtC/bd228be1828c2944c66227cde1ebbbd3.js?_=1744906950"></script>
 ```
